@@ -12,6 +12,17 @@ FIGURES_DIR.mkdir(exist_ok=True)
 
 STATES = ["Prime", "Near-Prime", "Sub-Prime", "Default"]
 TIER_COLORS = ["#2ecc71", "#f39c12", "#e74c3c", "#95a5a6"]
+RISK_TIERS = ["Prime", "Near-Prime", "Sub-Prime"]
+
+# Expanded delinquency ladder states (monthly step):
+LADDER_STATES = [
+    "Current",
+    "DPD_1_29",
+    "DPD_30_59",
+    "DPD_60_89",
+    "DPD_90_plus",
+    "ChargeOff",
+]
 
 # Monthly transition matrix template.
 # Rows = from-state, Cols = to-state. Default is absorbing.
@@ -72,6 +83,87 @@ def get_transition_matrix(scenario="base"):
     return TRANSITION_MATRICES[key].copy()
 
 
+def _build_ladder_matrix(p90_to_chargeoff):
+    """Build 6x6 monthly ladder matrix ending in ChargeOff (absorbing).
+
+    State order:
+        Current -> DPD_1_29 -> DPD_30_59 -> DPD_60_89 -> DPD_90_plus -> ChargeOff
+    """
+    p90_to_chargeoff = float(np.clip(p90_to_chargeoff, 0.001, 0.98))
+
+    # Fixed migration/cure backbone; only 90+ -> ChargeOff is calibrated by tier.
+    # Backbone is set to allow a broad annual PD range in calibration.
+    T = np.array([
+        # Cur      1-29    30-59   60-89   90+     CO
+        [0.700,    0.300,  0.000,  0.000,  0.000,  0.000],  # Current
+        [0.350,    0.250,  0.400,  0.000,  0.000,  0.000],  # DPD_1_29
+        [0.120,    0.000,  0.200,  0.680,  0.000,  0.000],  # DPD_30_59
+        [0.050,    0.000,  0.000,  0.200,  0.750,  0.000],  # DPD_60_89
+        [0.010,    0.000,  0.000,  0.000,  0.990 - p90_to_chargeoff, p90_to_chargeoff],
+        [0.000,    0.000,  0.000,  0.000,  0.000,  1.000],  # ChargeOff
+    ])
+    return T
+
+
+def ladder_annual_pd(T_ladder, months=12):
+    """Annual PD from Current to ChargeOff for 6-state ladder."""
+    Tm = np.linalg.matrix_power(T_ladder, months)
+    return float(Tm[0, -1])
+
+
+def _calibrate_ladder_to_target_pd(target_pd_annual, months=12):
+    """Calibrate p(90+ -> ChargeOff) via bisection to match target annual PD."""
+    lo, hi = 0.001, 0.98
+    for _ in range(45):
+        mid = (lo + hi) / 2
+        pd_mid = ladder_annual_pd(_build_ladder_matrix(mid), months=months)
+        if pd_mid < target_pd_annual:
+            lo = mid
+        else:
+            hi = mid
+    return _build_ladder_matrix((lo + hi) / 2)
+
+
+def _build_ladder_scenarios(months=12):
+    """Build ladder matrices by scenario+tier, anchored to 4-state annual PD."""
+    out = {}
+    for sc_name, T4 in TRANSITION_MATRICES.items():
+        pds = annual_pd(T4, months=months)
+        out[sc_name] = {
+            tier: _calibrate_ladder_to_target_pd(float(pd), months=months)
+            for tier, pd in zip(RISK_TIERS, pds)
+        }
+    return out
+
+
+LADDER_MATRICES = {}
+
+
+def get_ladder_matrix(scenario="base", tier="Prime"):
+    """Return 6-state ladder matrix for given scenario and tier."""
+    sc_key = scenario.strip().lower()
+    if sc_key not in LADDER_MATRICES:
+        opts = ", ".join(LADDER_MATRICES.keys())
+        raise ValueError(f"Unknown scenario '{scenario}'. Choose one of: {opts}")
+
+    tier_key = tier.strip()
+    if tier_key not in LADDER_MATRICES[sc_key]:
+        opts = ", ".join(LADDER_MATRICES[sc_key].keys())
+        raise ValueError(f"Unknown tier '{tier}'. Choose one of: {opts}")
+    return LADDER_MATRICES[sc_key][tier_key].copy()
+
+
+def project_ladder(T_ladder, pi0=None, steps=12):
+    """Project distribution over 6 delinquency states for *steps* months."""
+    if pi0 is None:
+        pi0 = np.array([1.0, 0.0, 0.0, 0.0, 0.0, 0.0])
+    traj = np.zeros((steps + 1, 6))
+    traj[0] = pi0
+    for t in range(steps):
+        traj[t + 1] = traj[t] @ T_ladder
+    return traj
+
+
 # Backward-compatible default used in notebook code.
 DEFAULT_T = T_BASE.copy()
 
@@ -93,6 +185,10 @@ def annual_pd(T, months=12):
         PD_annual(state) = T_m[state, Default]
     """
     return np.linalg.matrix_power(T, months)[:3, 3]
+
+
+# Initialize ladder scenarios after annual_pd is available.
+LADDER_MATRICES = _build_ladder_scenarios(months=12)
 
 
 def stationary(T):
