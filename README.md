@@ -2,6 +2,8 @@
 
 End-to-end credit decision project for deciding who should receive a loan limit increase under response uncertainty, risk migration, and a binding capital constraint.
 
+Key finding: a strategy that appears profitable under deterministic assumptions becomes loss-making once realistic default risk is simulated.
+
 The project is built as a full modeling pipeline rather than a single scoring model: it starts with portfolio diagnostics, converts risk assumptions into a scenario-based Markov framework, estimates customer acceptance, optimizes allocation under capital limits, and then stress-tests the recommended strategy with Monte Carlo simulation.
 
 The main business conclusion is intentionally decision-oriented: the deterministic optimum looks profitable, but it does not remain attractive once stochastic default risk is simulated under the current calibration.
@@ -32,17 +34,25 @@ Determine which customers should receive a credit limit increase in 2023 in orde
 
 ## Repository Structure
 
-- [notebooks/01_EDA.ipynb](/data/aturov/loan_limit_increases/notebooks/01_EDA.ipynb): data quality review, feature diagnostics, portfolio patterns
-- [notebooks/02_Markov.ipynb](/data/aturov/loan_limit_increases/notebooks/02_Markov.ipynb): scenario-based risk transition model and PD calibration
-- [notebooks/03_Demand.ipynb](/data/aturov/loan_limit_increases/notebooks/03_Demand.ipynb): acceptance propensity model
-- [notebooks/04_Optimization.ipynb](/data/aturov/loan_limit_increases/notebooks/04_Optimization.ipynb): capital-constrained allocation strategy
-- [notebooks/05_Simulation.ipynb](/data/aturov/loan_limit_increases/notebooks/05_Simulation.ipynb): Monte Carlo robustness analysis
-- [src/](/data/aturov/loan_limit_increases/src): reusable modeling and plotting modules
-- [data/](/data/aturov/loan_limit_increases/data): exported intermediate and final artifacts
+- [notebooks/01_EDA.ipynb](notebooks/01_EDA.ipynb): data quality review, feature diagnostics, portfolio patterns
+- [notebooks/02_Markov.ipynb](notebooks/02_Markov.ipynb): scenario-based risk transition model and PD calibration
+- [notebooks/03_Demand.ipynb](notebooks/03_Demand.ipynb): acceptance propensity model
+- [notebooks/04_Optimization.ipynb](notebooks/04_Optimization.ipynb): capital-constrained allocation strategy
+- [notebooks/05_Simulation.ipynb](notebooks/05_Simulation.ipynb): Monte Carlo robustness analysis
+- [src/](src): reusable modeling and plotting modules
+- [data/](data): exported intermediate and final artifacts
+
+Demand modeling was used to estimate the probability that a customer accepts a limit increase offer, and these acceptance probabilities feed directly into the optimization and simulation stages.
 
 ## Final Recommendation
 
 Use a risk-adjusted decision rule of the form `grant increase if incremental EV > 0`, implemented through the `lp_round` allocation strategy under the capital constraint.
+
+## Decision Rule
+
+Grant a limit increase if:
+
+`EV_i = 40 - PD_i * LGD * EAD_i > 0`
 
 However, the central business conclusion is that the deterministic optimum does not survive stochastic risk simulation under the current calibration.
 
@@ -53,11 +63,12 @@ As a result, a broad production rollout is not recommended under the current PD 
 - The optimized strategy offers increases to about `62.6%` of customers in the base scenario.
 - The offer mix is intentionally tilted toward lower-risk tiers: roughly `33.4% Prime`, `55.2% Near-Prime`, and only `11.4% Sub-Prime`.
 - Even with that conservative tilt, simulated losses dominate deterministic gains because the calibrated annual PDs are still high.
+- In the base scenario, simulated loss magnitude is more than `2x` the deterministic expected profit.
 - A realistic deployment path is a pilot focused on Prime and the upper part of Near-Prime, with Sub-Prime excluded from the first wave.
 
 ## Important Modeling Limitation
 
-The Markov risk model is a scenario-based approximation rather than a fully empirical migration model, because the source dataset does not provide a complete temporal panel of customer state transitions.
+The Markov risk model is a scenario-based approximation rather than a fully empirical migration model, due to lack of time-series data on customer state transitions.
 
 This means the transition matrices should be interpreted as structured business assumptions calibrated to plausible risk levels, not as directly estimated vintage roll-rate matrices.
 
@@ -72,11 +83,11 @@ This means the transition matrices should be interpreted as structured business 
 
 Main exported artifacts:
 
-- [data/optimization_summary.csv](/data/aturov/loan_limit_increases/data/optimization_summary.csv)
-- [data/allocation_recommended.csv](/data/aturov/loan_limit_increases/data/allocation_recommended.csv)
-- [data/simulation_summary.csv](/data/aturov/loan_limit_increases/data/simulation_summary.csv)
-- [data/simulation_sensitivity.csv](/data/aturov/loan_limit_increases/data/simulation_sensitivity.csv)
+- [data/optimization_summary.csv](data/optimization_summary.csv)
+- [data/allocation_recommended.csv](data/allocation_recommended.csv)
+- [data/simulation_summary.csv](data/simulation_summary.csv)
+- [data/simulation_sensitivity.csv](data/simulation_sensitivity.csv)
 
 ## Environment
 
-Python dependencies are listed in [requirements.txt](/data/aturov/loan_limit_increases/requirements.txt).
+Python dependencies are listed in [requirements.txt](requirements.txt).
